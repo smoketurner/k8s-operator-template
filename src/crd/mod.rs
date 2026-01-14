@@ -144,7 +144,7 @@ impl Condition {
             },
             reason: reason.to_string(),
             message: message.to_string(),
-            last_transition_time: chrono::Utc::now().to_rfc3339(),
+            last_transition_time: jiff::Timestamp::now().to_string(),
             observed_generation: generation,
         }
     }
