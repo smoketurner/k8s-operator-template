@@ -11,7 +11,8 @@
 
 use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::post};
 use kube::Client;
-use serde::{Deserialize, Serialize};
+use kube::Resource;
+use kube::core::admission::{AdmissionRequest, AdmissionResponse, AdmissionReview, Operation};
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
@@ -25,73 +26,6 @@ pub const WEBHOOK_KEY_PATH: &str = "/etc/webhook/certs/tls.key";
 /// Default webhook server port
 pub const WEBHOOK_PORT: u16 = 9443;
 
-/// Kubernetes AdmissionReview request
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AdmissionReview {
-    pub api_version: String,
-    pub kind: String,
-    pub request: Option<AdmissionRequest>,
-}
-
-/// AdmissionRequest contains the details of the admission request
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AdmissionRequest {
-    pub uid: String,
-    pub kind: GroupVersionKind,
-    pub resource: GroupVersionResource,
-    pub operation: String,
-    pub namespace: Option<String>,
-    pub name: Option<String>,
-    pub object: Option<serde_json::Value>,
-    pub old_object: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GroupVersionKind {
-    pub group: String,
-    pub version: String,
-    pub kind: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GroupVersionResource {
-    pub group: String,
-    pub version: String,
-    pub resource: String,
-}
-
-/// AdmissionReview response
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AdmissionReviewResponse {
-    pub api_version: String,
-    pub kind: String,
-    pub response: AdmissionResponse,
-}
-
-/// AdmissionResponse contains the result
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AdmissionResponse {
-    pub uid: String,
-    pub allowed: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<AdmissionStatus>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AdmissionStatus {
-    pub code: i32,
-    pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-}
-
 /// Shared state for webhook handlers
 pub struct WebhookState {
     #[allow(dead_code)]
@@ -104,6 +38,19 @@ impl WebhookState {
     }
 }
 
+/// Create a denial response with reason embedded in message.
+/// kube-rs deny() only sets status.message, so we format as "[reason] message"
+fn deny_with_reason<T: Resource<DynamicType = ()>>(
+    request: &AdmissionRequest<T>,
+    message: &str,
+    reason: &str,
+) -> AdmissionReview<kube::core::DynamicObject> {
+    let full_message = format!("[{}] {}", reason, message);
+    AdmissionResponse::from(request)
+        .deny(full_message)
+        .into_review()
+}
+
 /// Create the webhook router
 pub fn create_webhook_router(state: Arc<WebhookState>) -> Router {
     Router::new()
@@ -114,85 +61,64 @@ pub fn create_webhook_router(state: Arc<WebhookState>) -> Router {
 /// Validate a MyResource admission webhook handler
 async fn validate_myresource(
     State(_state): State<Arc<WebhookState>>,
-    Json(review): Json<AdmissionReview>,
+    Json(review): Json<AdmissionReview<MyResource>>,
 ) -> impl IntoResponse {
-    let request = match review.request {
-        Some(req) => req,
-        None => {
-            error!("Admission review missing request");
+    let request: AdmissionRequest<MyResource> = match review.try_into() {
+        Ok(req) => req,
+        Err(e) => {
+            error!(error = %e, "Failed to extract admission request");
             return (
                 StatusCode::BAD_REQUEST,
-                Json(create_response(
-                    "",
-                    false,
-                    "Missing request in AdmissionReview",
-                    None,
-                )),
+                Json(
+                    AdmissionResponse::invalid(format!("Invalid AdmissionReview: {}", e))
+                        .into_review(),
+                ),
             );
         }
     };
 
-    let uid = request.uid.clone();
+    let uid = &request.uid;
     debug!(
         uid = %uid,
-        operation = %request.operation,
+        operation = ?request.operation,
         namespace = ?request.namespace,
         name = ?request.name,
         "Processing admission request"
     );
 
     // DELETE operations are always allowed
-    if request.operation == "DELETE" {
-        return (StatusCode::OK, Json(create_response(&uid, true, "", None)));
+    if request.operation == Operation::Delete {
+        info!(uid = %uid, "Admission request allowed (DELETE)");
+        return (
+            StatusCode::OK,
+            Json(AdmissionResponse::from(&request).into_review()),
+        );
     }
 
-    // Parse the new object
-    let resource: MyResource = match request.object {
-        Some(obj) => match serde_json::from_value(obj) {
-            Ok(r) => r,
-            Err(e) => {
-                error!(error = %e, "Failed to parse MyResource");
-                return (
-                    StatusCode::OK,
-                    Json(create_response(
-                        &uid,
-                        false,
-                        &format!("Failed to parse object: {}", e),
-                        None,
-                    )),
-                );
-            }
-        },
+    // Get the new object (already typed as MyResource)
+    let resource: MyResource = match &request.object {
+        Some(obj) => obj.clone(),
         None => {
+            error!(uid = %uid, "Missing object in request");
             return (
                 StatusCode::OK,
-                Json(create_response(
-                    &uid,
-                    false,
+                Json(deny_with_reason(
+                    &request,
                     "Missing object in request",
-                    None,
+                    "InvalidRequest",
                 )),
             );
         }
     };
 
-    // Parse the old object for UPDATE operations
-    let old_resource: Option<MyResource> = match &request.old_object {
-        Some(obj) => match serde_json::from_value(obj.clone()) {
-            Ok(r) => Some(r),
-            Err(e) => {
-                warn!(error = %e, "Failed to parse old MyResource, treating as CREATE");
-                None
-            }
-        },
-        None => None,
-    };
+    // Get the old object for UPDATE operations (already typed)
+    let old_resource: Option<MyResource> = request.old_object.clone();
 
     // Create validation context
     let ctx = ValidationContext {
         resource: &resource,
         old_resource: old_resource.as_ref(),
-        dry_run: false,
+        dry_run: request.dry_run,
         namespace: request.namespace.as_deref(),
     };
 
@@ -209,38 +135,15 @@ async fn validate_myresource(
         warn!(uid = %uid, reason = %reason, message = %message, "Admission request denied");
         return (
             StatusCode::OK,
-            Json(create_response(&uid, false, &message, Some(&reason))),
+            Json(deny_with_reason(&request, &message, &reason)),
         );
     }
 
     info!(uid = %uid, "Admission request allowed");
-    (StatusCode::OK, Json(create_response(&uid, true, "", None)))
-}
-
-/// Create an AdmissionReview response
-fn create_response(
-    uid: &str,
-    allowed: bool,
-    message: &str,
-    reason: Option<&str>,
-) -> AdmissionReviewResponse {
-    AdmissionReviewResponse {
-        api_version: "admission.k8s.io/v1".to_string(),
-        kind: "AdmissionReview".to_string(),
-        response: AdmissionResponse {
-            uid: uid.to_string(),
-            allowed,
-            status: if allowed {
-                None
-            } else {
-                Some(AdmissionStatus {
-                    code: 403,
-                    message: message.to_string(),
-                    reason: reason.map(String::from),
-                })
-            },
-        },
-    }
+    (
+        StatusCode::OK,
+        Json(AdmissionResponse::from(&request).into_review()),
+    )
 }
 
 /// Errors that can occur when running the webhook server
@@ -323,25 +226,6 @@ mod tests {
             },
             status: None,
         }
-    }
-
-    #[test]
-    fn test_create_allowed_response() {
-        let resp = create_response("test-uid", true, "", None);
-        assert_eq!(resp.response.uid, "test-uid");
-        assert!(resp.response.allowed);
-        assert!(resp.response.status.is_none());
-    }
-
-    #[test]
-    fn test_create_denied_response() {
-        let resp = create_response("test-uid", false, "Test error", Some("TestReason"));
-        assert_eq!(resp.response.uid, "test-uid");
-        assert!(!resp.response.allowed);
-        let status = resp.response.status.unwrap();
-        assert_eq!(status.code, 403);
-        assert_eq!(status.message, "Test error");
-        assert_eq!(status.reason, Some("TestReason".to_string()));
     }
 
     #[test]
