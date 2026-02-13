@@ -126,7 +126,7 @@ Every feature should make at least one of these journeys easier, not harder.
 ## Project-Specific Context
 
 This is a Kubernetes operator template using:
-- kube-rs 2.x in Rust
+- kube-rs 3.x in Rust
 - Target Kubernetes version: 1.35+
 
 When evaluating changes, consider impact on:

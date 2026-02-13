@@ -14,7 +14,7 @@ This is a **template repository** for building Kubernetes operators in Rust usin
 |-----------|-----------------|
 | Rust | 1.92+ (Edition 2024) |
 | Kubernetes | 1.35+ |
-| kube-rs | 2.x |
+| kube-rs | 3.x |
 
 ## Customization Guide
 

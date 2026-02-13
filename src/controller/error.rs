@@ -36,7 +36,7 @@ pub enum Error {
 impl Error {
     /// Check if this error indicates a not-found condition
     pub fn is_not_found(&self) -> bool {
-        matches!(self, Error::Kube(kube::Error::Api(e)) if e.code == 404)
+        matches!(self, Error::Kube(kube::Error::Api(s)) if s.is_not_found())
     }
 
     /// Check if this error should be retried

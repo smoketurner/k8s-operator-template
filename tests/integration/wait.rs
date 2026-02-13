@@ -126,7 +126,7 @@ where
     let wait_future = async {
         // First check if already deleted
         match api.get(name).await {
-            Err(kube::Error::Api(e)) if e.code == 404 => {
+            Err(kube::Error::Api(s)) if s.is_not_found() => {
                 return Ok(());
             }
             Err(e) => return Err(WaitError::KubeError(e)),

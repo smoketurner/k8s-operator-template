@@ -399,7 +399,7 @@ async fn check_ready_replicas(
                 .unwrap_or(0);
             Ok(ready)
         }
-        Err(kube::Error::Api(e)) if e.code == 404 => Ok(0),
+        Err(kube::Error::Api(s)) if s.is_not_found() => Ok(0),
         Err(e) => Err(Error::Kube(e)),
     }
 }
