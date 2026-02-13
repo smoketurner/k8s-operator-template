@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use kube::Client;
-use kube_leader_election::{LeaseLock, LeaseLockParams};
+use kube_leader_election::{LeaseLock, LeaseLockParams, LeaseLockResult};
 use tokio::signal;
 use tracing::{error, info, warn};
 
@@ -97,15 +97,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Waiting to acquire leadership...");
     loop {
         match lease_lock.try_acquire_or_renew().await {
-            Ok(result) => {
-                if result.acquired_lease {
+            Ok(result) => match result {
+                LeaseLockResult::Acquired(_) => {
                     info!("Acquired leadership");
                     is_leader.store(true, Ordering::SeqCst);
                     break;
-                } else {
+                }
+                LeaseLockResult::NotAcquired(_) => {
                     info!("Another instance is leader, waiting...");
                 }
-            }
+            },
             Err(e) => {
                 warn!("Failed to acquire lease: {}, retrying...", e);
             }
@@ -133,7 +134,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 match lease_lock.try_acquire_or_renew().await {
                     Ok(result) => {
-                        if !result.acquired_lease {
+                        if matches!(result, LeaseLockResult::NotAcquired(_)) {
                             error!("Lost leadership! Shutting down...");
                             is_leader.store(false, Ordering::SeqCst);
                             // Exit so Kubernetes restarts us and we re-enter election

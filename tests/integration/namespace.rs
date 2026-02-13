@@ -93,7 +93,7 @@ impl TestNamespace {
             Ok(_) => {
                 tracing::info!(namespace = %self.name, "Deleted test namespace");
             }
-            Err(kube::Error::Api(e)) if e.code == 404 => {
+            Err(kube::Error::Api(s)) if s.is_not_found() => {
                 // Already deleted, ignore
             }
             Err(e) => {
@@ -143,7 +143,7 @@ impl Drop for TestNamespace {
                     Ok(_) => {
                         tracing::debug!("Drop: namespace {} deletion initiated", name);
                     }
-                    Err(kube::Error::Api(e)) if e.code == 404 => {
+                    Err(kube::Error::Api(s)) if s.is_not_found() => {
                         tracing::debug!("Drop: namespace {} already deleted", name);
                     }
                     Err(e) => {
@@ -243,7 +243,7 @@ pub async fn wait_for_namespace_deletion(client: Client, name: &str, timeout: Du
                 }
                 sleep(Duration::from_millis(500)).await;
             }
-            Err(kube::Error::Api(e)) if e.code == 404 => {
+            Err(kube::Error::Api(s)) if s.is_not_found() => {
                 break;
             }
             Err(e) => {

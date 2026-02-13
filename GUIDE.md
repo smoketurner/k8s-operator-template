@@ -17,7 +17,7 @@ For full implementations, refer to the source files directly. This guide focuses
 |-----------|-----------------|-------|
 | Rust | 1.92+ | Edition 2024, MSRV enforced in `Cargo.toml` |
 | Kubernetes | 1.35+ | Required for latest API features |
-| kube-rs | 2.x | With k8s-openapi v1_34 feature |
+| kube-rs | 3.x | With k8s-openapi v1_35 feature |
 
 ---
 
