@@ -39,7 +39,7 @@ rustls = { version = "=0.23.36", default-features = false, features = ["aws-lc-r
 
 # Utilities
 jiff = { version = "=0.2.20", default-features = false, features = ["std"] }
-rand = { version = "=0.10.0", default-features = false }
+rand = { version = "=0.10.1", default-features = false }
 
 # Leader election
 kube-leader-election = { version = "=0.43.0", default-features = false }
